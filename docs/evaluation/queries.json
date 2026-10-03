@@ -1,0 +1,6 @@
+[
+  {"question":"Como funciona o retry da API de pagamento?","expectedDocumentId":"payment-api"},
+  {"question":"Como solicito acesso ao ambiente de testes?","expectedDocumentId":"authentication"},
+  {"question":"Uma resposta 202 significa que a recarga terminou?","expectedDocumentId":"recharge-api"},
+  {"question":"Qual é a política de férias da empresa?","expectedKind":"INSUFFICIENT_CONTEXT"}
+]

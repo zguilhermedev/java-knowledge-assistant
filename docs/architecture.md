@@ -1,76 +1,143 @@
 # Arquitetura do Knowledge Assistant
 
-## Estado implementado
+Aplicação Java 25 com Spring Boot Web MVC e LangChain4j. O projeto separa ingestão, recuperação, geração, validação e transporte HTTP para permitir inspecionar o contexto usado em cada resposta.
 
-Uma aplicação Java 25 com Spring Boot Web MVC expõe ingestão de documentação e armazenamento vetorial por meio do LangChain4j. Ainda não há busca HTTP, geração de respostas RAG, ferramentas de status ou streaming.
+## Fluxos implementados
 
 ```mermaid
 flowchart TD
-    Json[POST /documents: JSON] --> Controller[DocumentController]
-    Preview[POST /documents/preview] --> Controller
-    Corpus[POST /documents/corpus] --> Controller
-    Controller --> Importer[CorpusImporter: Markdown UTF-8]
-    Importer --> Service[DocumentService]
-    Controller --> Service
-    Controller --> Chunker[DocumentChunker]
-    Service --> Chunker
-    Chunker --> Segments[TextSegments com origem e IDs]
-    Segments --> Gateway[EmbeddingGateway]
-    Gateway --> Ollama[Ollama: modelo de embeddings]
-    Ollama --> Vectors[Vetores validados]
-    Vectors --> Service
-    Service --> Store[EmbeddingStore: PgVectorEmbeddingStore]
-    Store --> Database[(PostgreSQL + pgvector)]
+    Docs[JSON ou corpus Markdown] --> Ingest[DocumentService e DocumentChunker]
+    Ingest --> Embeddings[EmbeddingGateway / modelo de embeddings]
+    Embeddings --> Store[(PostgreSQL / pgvector)]
+    Question[Pergunta] --> Retrieval[RetrievalService]
+    Retrieval --> Embeddings
+    Retrieval --> Store
+    Retrieval --> Sources[Trechos com IDs e scores]
+    Sources --> Context[ContextBuilder]
+    Context --> Chat[RagAssistant / modelo de chat]
+    Chat --> Verify[AnswerVerifier]
+    Sources --> Verify
+    Verify --> Answer[Resposta com fontes]
+    Tools[ToolAssistant] --> SearchTool[searchDocumentation]
+    SearchTool --> Retrieval
+    Tools --> StatusTool[getServiceStatus]
+    StatusTool --> Status[Gateway simulado]
+    Tools --> Verify
+    Status --> Verify
 ```
 
-O preview usa somente o chunker. O contexto Spring que expõe esse endpoint requer também as dependências dos demais métodos do controller.
+O preview utiliza apenas o chunker. A busca HTTP gera o embedding da consulta e retorna candidatos, sem gerar resposta. No RAG explícito, a ausência de candidatos encerra o fluxo antes do chat.
 
 ## Responsabilidades
 
 | Componente | Responsabilidade |
 | --- | --- |
-| `DocumentController` | Mapeamento HTTP e validação de requisições JSON |
-| `DocumentRequest`, `DocumentResponse`, `ChunkView` | Entrada, recibo e inspeção |
-| `DocumentChunker` | Validação comum, divisão recursiva, metadados e IDs determinísticos |
-| `EmbeddingGateway` | Adaptação do modelo e verificação de quantidade, dimensão e valores finitos |
-| `DocumentService` | Geração dos vetores e substituição dos trechos de um documento |
-| `CorpusImporter` | Leitura do diretório configurado e reutilização da ingestão |
-| `PgVectorProperties`, `PgVectorConfiguration` | Propriedades validadas e construção do store |
-| `KnowledgeException`, `ApiExceptionHandler` | Falhas operacionais e respostas `ProblemDetail` |
+| `DocumentController` | Endpoints de documento, preview e corpus |
+| `DocumentChunker` | Validação, divisão, metadados e IDs determinísticos |
+| `EmbeddingGateway` | Modelo de embeddings e verificação de quantidade, dimensão e valores finitos |
+| `DocumentService` | Preparação dos vetores e substituição dos trechos |
+| `CorpusImporter` | Leitura UTF-8 do diretório configurado |
+| `PgVectorConfiguration` | Construção do store com propriedades validadas |
+| `RetrievalService` | Busca por similaridade, filtro de modelo e conversão para fontes |
+| `ContextBuilder` | Serialização das fontes como dados para o prompt |
+| `RagQuestionService`, `RagAssistant` | Recuperação explícita e geração estruturada |
+| `AnswerVerifier` | Contrato, referências de citações e classificação do resultado |
+| `ToolQuestionService`, `ToolAssistant` | Ciclo modelo/tools com limites e tratamento explícito de erros |
+| `KnowledgeTools` | Validação dos argumentos e captura das consultas feitas |
+| `ServiceStatusGateway` | Status fictício com horário e indicação de simulação |
+| `QuestionStreamingService` | RAG assíncrono, fragmentos, validação final e ciclo de vida SSE |
+| `StreamingConfiguration` | Executor dedicado com virtual threads |
+| `ApiExceptionHandler` | Conversão de falhas HTTP para `ProblemDetail` |
 
-Spring Boot oferece HTTP, injeção de dependências, validação e configuração. LangChain4j oferece tipos de documento, segmentação, modelo de embeddings e armazenamento vetorial. A integração de IA usa somente LangChain4j.
+Spring Boot fornece transporte, validação, configuração e injeção. LangChain4j fornece modelos, tipos de documento, splitter, store, AI Services e execução de tools. Chat, chat em streaming e embeddings são clientes distintos.
 
-## Configuração e infraestrutura
+## Configuração e execução
 
 | Perfil Spring | Componentes |
 | --- | --- |
-| Nenhum | Bootstrap HTTP e Actuator, sem dependências externas |
-| `knowledge` | Controller e ingestão; requer modelo e store |
-| `ollama` | Clientes separados de chat e embeddings |
+| Nenhum | Bootstrap HTTP e Actuator, sem integrações externas |
+| `knowledge` | Endpoints e fluxos; requer modelos e store |
+| `ollama` | Clientes de chat, streaming e embeddings |
 | `pgvector` | Propriedades do banco e `PgVectorEmbeddingStore` |
 
-O runtime de ingestão usa os três perfis. Os testes de contrato ativam somente `knowledge` e fornecem `EmbeddingModel` e `InMemoryEmbeddingStore` por configuração de teste, com dimensão 3. O runtime usa dimensão 768 por padrão.
+Os testes HTTP ativam `knowledge` e fornecem modelos determinísticos e store em memória. O teste de embeddings usa dimensão 3; o runtime com `nomic-embed-text:v1.5` usa 768.
 
-O Compose inicia PostgreSQL 17/pgvector e Ollama em portas de loopback 5433 e 11534. Volumes separados preservam banco e modelos. O SQL inicial habilita a extensão; o builder cria a tabela com `createTable(true)`, preserva a existente com `dropTableFirst(false)` e não cria índice vetorial aproximado com `useIndex(false)`. A tabela mantém chave primária UUID, vetor, texto e JSON de metadados. Mudar a propriedade de dimensão não migra uma tabela existente.
+O Compose principal inicia PostgreSQL 17/pgvector e Ollama, em portas de loopback 5433 e 11534, com volumes separados. `compose.app.yaml` acrescenta a aplicação compilada em Docker, na porta 8082, e monta o corpus para leitura. Dentro da rede Docker, a aplicação acessa `postgres:5432` e `ollama:11434`.
 
-O Actuator comprova a saúde HTTP básica. Não existe indicador personalizado de inferência ou persistência. Virtual threads estão habilitadas; chamadas atuais de modelo e store continuam síncronas.
+O Dockerfile compila com JDK 25 e executa com JRE 25 e usuário sem privilégios de root. O healthcheck HTTP permite verificar a inicialização da aplicação. A saúde do container Ollama não comprova a presença dos modelos; o download e a importação do corpus são operações explícitas.
 
-## Identificação e substituição
+## Ingestão e identidade dos trechos
 
-Cada trecho carrega `documentId`, `title`, `embeddingModel`, `chunkId` e `chunkIndex`. O splitter pode acrescentar seu metadado `index`. O UUID deriva de ID do documento, chave do modelo, posição e texto, codificados em UTF-8. O título não participa dessa identidade.
+Cada trecho carrega `documentId`, `title`, `embeddingModel`, `chunkId` e `chunkIndex`. O splitter pode acrescentar `index`. O UUID deriva de ID do documento, chave do modelo, posição e texto em UTF-8; o título não participa da identidade.
 
-A divisão usa caracteres, com limite 800 e sobreposição configurada 120, sem tokenizer. O preview utiliza a chave `preview`, portanto seus UUIDs diferem dos UUIDs de ingestão mesmo quando textos e posições são iguais.
+A divisão usa caracteres, limite 800 e sobreposição configurada 120, sem tokenizer. O preview utiliza a chave `preview`, portanto seus IDs diferem dos IDs de ingestão.
 
-Para reindexar, o serviço prepara todos os vetores, remove registros filtrados por documento **e** modelo e adiciona IDs, vetores e segmentos na mesma ordem. `synchronized` serializa chamadas nessa instância do serviço. Não coordena outras instâncias nem constitui transação PostgreSQL entre remoção e inserção. Falha de geração preserva os dados anteriores; falha de inserção após remoção pode exigir reingestão.
+Para reindexar, o serviço prepara todos os vetores, remove registros filtrados por documento e modelo e adiciona IDs, vetores e segmentos na mesma ordem. `synchronized` serializa chamadas nessa instância. Não coordena outras instâncias nem torna a troca transacional. Uma falha de embeddings preserva os dados anteriores; uma falha após a remoção pode exigir reingestão.
 
-Alterações de modelo ou estratégia de divisão devem usar um índice compatível. Dimensão igual não implica espaço vetorial igual. A chave configurada do modelo também não identifica automaticamente mudanças nos pesos mantidas sob a mesma tag.
+A importação lê somente arquivos `.md` regulares do primeiro nível do diretório configurado, ordenados, limitados a 400.000 bytes por arquivo. O nome sem extensão define o ID e o primeiro cabeçalho `# ` define o título. O contrato é validado novamente nos objetos criados internamente. O processamento é sequencial e pode ser parcial.
 
-## Corpus e validação
+## Recuperação e geração
 
-A importação usa somente o diretório administrativamente configurado, sem aceitar caminho na requisição HTTP. `Files.list` examina o primeiro nível; arquivos regulares com sufixo `.md` são ordenados, limitados a 400.000 bytes e lidos em UTF-8. O nome sem extensão define o ID e o primeiro cabeçalho `# ` define o título. O chunker reaplica o contrato aos objetos criados internamente.
+A recuperação gera o vetor da consulta com o mesmo modelo configurado para a ingestão. O store aplica score mínimo, quantidade máxima e filtro de metadado `embeddingModel`. O resultado inclui o texto e sua origem para inspeção antes da geração.
 
-O processamento é sequencial e pode ser parcial. Um arquivo inválido pode interromper o lote depois de documentos anteriores já persistidos. Não há parser estrutural de Markdown. O diretório deve ser confiável, pois não há proteção adicional contra links simbólicos nem upload isolado por usuário.
+`ContextBuilder` serializa fontes como JSON. O prompt de sistema orienta o modelo a tratar documentos como dados, ignorar instruções contidas neles e usar somente IDs disponíveis. `AiServices` cria a implementação da interface `RagAssistant`, utiliza o `ChatModel` injetado e converte a saída para `GeneratedAnswer`.
 
-## Verificação
+O verificador valida o DTO e rejeita citações que não pertencem aos candidatos. Com contexto suficiente, exige ao menos uma fonte citada ou um status consultado. A resposta pública contém apenas as fontes citadas. Contrato e procedência são verificados por código; a coerência semântica das afirmações ainda depende do modelo e da avaliação.
 
-O build padrão executa quatro testes sem infraestrutura externa: saúde HTTP real, sucesso e rejeição do contrato via MockMvc e estabilidade dos IDs no chunker. O perfil Maven `models-it` acrescenta um teste com chat e embeddings reais. Os testes atuais não verificam automaticamente importação de diretório, troca transacional, concorrência entre instâncias ou persistência PostgreSQL.
+Não há memória de conversa. Cada pergunta é tratada independentemente.
+
+## Tools e status
+
+O fluxo de `/questions` cria um conjunto de tools por requisição, evitando compartilhar fontes e status capturados entre perguntas. O modelo recebe as descrições de `searchDocumentation` e `getServiceStatus` e pode solicitar sua execução.
+
+Os argumentos são validados antes das operações. Erros corrigíveis têm mensagens próprias para o modelo por `ToolErrorVisibleToLlm`. Os handlers permitem informar erros de argumentos e fazem falhar a invocação quando uma exceção de execução não foi declarada visível ao modelo.
+
+Há limite de quatro rodadas de tool calling e orçamento de oito execuções de tools. O resultado estruturado de status é serializado para o modelo, enquanto o objeto original é preservado para a resposta pública.
+
+O gateway mantém `payment-service=DEGRADED`, `recharge-service=UP` e `auth-service=UP`. Outros nomes retornam `UNKNOWN`. Todos os resultados têm `simulated=true`. Status consultado pode sustentar uma resposta mesmo sem citações documentais.
+
+## Streaming
+
+```mermaid
+sequenceDiagram
+    participant Client as Cliente
+    participant HTTP as StreamingController
+    participant Worker as Executor / serviço
+    participant Model as StreamingChatModel
+    Client->>HTTP: POST /questions/stream
+    HTTP->>Worker: Agendar busca e geração
+    HTTP-->>Client: Resposta SSE aberta
+    Worker->>Worker: Recuperar fontes
+    Worker-->>Client: retrieved
+    Worker->>Model: Contexto e pergunta
+    loop Fragmentos
+        Model-->>Worker: onPartialResponse
+        Worker-->>Client: token
+    end
+    Model-->>Worker: onCompleteResponse
+    Worker->>Worker: Extrair e validar citações
+    Worker-->>Client: answer
+    Worker-->>Client: done
+```
+
+O endpoint usa RAG explícito, sem tools. O executor libera a thread HTTP da busca e da geração; os callbacks recebem fragmentos e a conclusão do modelo. As escritas no emitter são serializadas por lock. Uma flag terminal impede novas emissões após encerramento.
+
+Fragmentos não são verificados individualmente. Na conclusão, os IDs entre colchetes são extraídos e verificados contra as fontes recuperadas. Somente o evento `answer` contém o resultado final validado; falhas enviam `error` e encerram sem `done`.
+
+Sem fontes, o serviço emite uma resposta determinística de contexto insuficiente e `done`, sem chamar o modelo. Há limite de 8.000 caracteres recebidos e timeout de 150 segundos. O cancelamento usa o handle quando disponibilizado pelo provider; não garante interrupção de toda operação externa.
+
+## Persistência e limites
+
+A tabela mantém chave primária UUID, vetor, texto e JSON de metadados. O builder usa `createTable(true)`, `dropTableFirst(false)` e `useIndex(false)`. O SQL inicial habilita `vector` em volumes novos.
+
+Mudar a dimensão não migra uma tabela existente. Modelos de mesma dimensão podem gerar espaços vetoriais incompatíveis; mudanças de modelo ou estratégia de divisão exigem índice compatível e reindexação. Uma tag configurada não identifica automaticamente mudanças de pesos sob o mesmo nome.
+
+O Actuator não inclui indicador personalizado de inferência ou persistência. O projeto não implementa autenticação, isolamento por usuário, memória de conversa, busca híbrida ou parser de PDF. O corpus e os serviços de exemplo são fictícios.
+
+## Validação
+
+O build padrão executa 19 testes determinísticos: contratos HTTP, busca e RAG, reingestão, citações, tools, streaming e composição de RAG com componentes da biblioteca.
+
+O perfil `database-it` usa PostgreSQL/pgvector real separado, configurado por `src/test/resources/compose.tests.yaml`, com dados efêmeros e porta 15433. O perfil `models-it` chama chat e embeddings reais no Ollama. São executados separadamente.
+
+`scripts/evaluate.ps1` registra resultados de um conjunto pequeno de consultas, acerto de recuperação por documento esperado, tipo de resposta e latência. O relatório permite comparar alterações, mas não mede automaticamente a fidelidade de todas as afirmações.

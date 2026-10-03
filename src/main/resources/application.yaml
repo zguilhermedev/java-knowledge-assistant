@@ -18,4 +18,4 @@ management:
       show-details: never
 
 # Sem perfil, não há modelos de IA nem conexão com banco.
-# Use knowledge,ollama,pgvector para habilitar a ingestão com as integrações reais.
+# Use knowledge,ollama,pgvector para habilitar os fluxos com as integrações reais.
