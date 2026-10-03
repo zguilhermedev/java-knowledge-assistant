@@ -1,0 +1,9 @@
+knowledge-assistant:
+  pgvector:
+    host: ${PGVECTOR_HOST:localhost}
+    port: ${PGVECTOR_PORT:5433}
+    database: ${PGVECTOR_DATABASE:knowledge_assistant}
+    user: ${PGVECTOR_USER:knowledge_assistant}
+    password: ${PGVECTOR_PASSWORD:knowledge_assistant_local}
+    table: ${PGVECTOR_TABLE:knowledge_embeddings_nomic_v15}
+    dimension: ${PGVECTOR_DIMENSION:768}

@@ -1,0 +1,15 @@
+langchain4j:
+  ollama:
+    chat-model:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11534}
+      model-name: ${OLLAMA_CHAT_MODEL:llama3.2:3b}
+      temperature: 0.0
+      timeout: 120s
+      log-requests: false
+      log-responses: false
+    embedding-model:
+      base-url: ${OLLAMA_BASE_URL:http://localhost:11534}
+      model-name: ${OLLAMA_EMBEDDING_MODEL:nomic-embed-text:v1.5}
+      timeout: 120s
+      log-requests: false
+      log-responses: false

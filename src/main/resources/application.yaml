@@ -1,0 +1,21 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: java-knowledge-assistant
+  threads:
+    virtual:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+# Sem perfil, não há modelos de IA nem conexão com banco.
+# Use knowledge,ollama,pgvector para habilitar a ingestão com as integrações reais.

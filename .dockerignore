@@ -1,0 +1,15 @@
+.git
+.idea
+.vscode
+target
+*.log
+.env
+.env.*
+!.env.example
+AGENTS.md
+prompt.md
+knowledge-assistant-contexto.md
+docs/tutorial.md
+docs/validacao-inicial.md
+docs/validacao-tutorial.md
+docs/revisao-etapas-0-a-5.md

@@ -1,0 +1,8 @@
+knowledge-assistant:
+  ingestion:
+    chunk-size: 800
+    overlap: 120
+  retrieval:
+    max-results: 3
+    min-score: 0.6
+  corpus-path: ${KNOWLEDGE_CORPUS_PATH:docs/corpus}
